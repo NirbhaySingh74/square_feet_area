@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Leaflet + Turf Tile Area</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+
+  <!-- Leaflet Draw -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+
+  <!-- Turf.js -->
+  <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+
+  <style>
+    #map { height: 90vh; }
+    #tile-info {
+      padding: 10px;
+      font-family: monospace;
+      white-space: pre;
+      background: #f9f9f9;
+      border-top: 1px solid #ccc;
+    }
+  </style>
+</head>
+<body>
+
+<div id="map"></div>
+<div id="tile-info">Draw a polygon to get tile info...</div>
+
+<script>
+  const map = L.map('map').setView([37.7749, -122.4194], 18);
+
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 20,
+  }).addTo(map);
+
+  const drawnItems = new L.FeatureGroup();
+  map.addLayer(drawnItems);
+
+  const drawControl = new L.Control.Draw({
+    draw: {
+      polygon: true,
+      polyline: false,
+      rectangle: false,
+      circle: false,
+      marker: false,
+      circlemarker: false
+    },
+    edit: {
+      featureGroup: drawnItems
+    }
+  });
+  map.addControl(drawControl);
+
+  function lngLatToTile(lon, lat, zoom) {
+    const tileCount = Math.pow(2, zoom);
+    const x = Math.floor(((lon + 180) / 360) * tileCount);
+    const y = Math.floor(
+      (1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * tileCount
+    );
+    return { x, y };
+  }
+
+  function tileToBbox(x, y, zoom) {
+    const n = Math.pow(2, zoom);
+    const lon1 = x / n * 360 - 180;
+    const lat1 = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI;
+    const lon2 = (x + 1) / n * 360 - 180;
+    const lat2 = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 1) / n))) * 180 / Math.PI;
+    return [lon1, lat2, lon2, lat1]; // [west, south, east, north]
+  }
+
+  map.on(L.Draw.Event.CREATED, function (event) {
+    drawnItems.clearLayers();
+
+    const layer = event.layer;
+    drawnItems.addLayer(layer);
+
+    const geojson = layer.toGeoJSON();
+    const bounds = layer.getBounds();
+
+    const zoom = 18;
+    const nwTile = lngLatToTile(bounds.getWest(), bounds.getNorth(), zoom);
+    const seTile = lngLatToTile(bounds.getEast(), bounds.getSouth(), zoom);
+
+    const intersectingTiles = [];
+
+    for (let x = nwTile.x; x <= seTile.x; x++) {
+      for (let y = nwTile.y; y <= seTile.y; y++) {
+        const bbox = tileToBbox(x, y, zoom);
+        const tilePolygon = turf.bboxPolygon(bbox);
+
+        if (turf.booleanIntersects(geojson, tilePolygon)) {
+          const m2 = turf.area(tilePolygon);
+          const ft2 = m2 * 10.7639;
+          intersectingTiles.push({
+            tileID: `${zoom}/${x}/${y}`,
+            squareFeet: ft2.toFixed(2)
+          });
+        }
+      }
+    }
+
+    const output = intersectingTiles.map(t => `Tile ${t.tileID} = ${t.squareFeet} ft²`).join('\n');
+    document.getElementById('tile-info').textContent = output;
+    console.log(output);
+  });
+
+  // ✅  Verify single tile area at zoom 18
+  (() => {
+    const x = 65536 / 2;
+    const y = 65536 / 2;
+    const bbox = tileToBbox(x, y, 18);
+    const polygon = turf.bboxPolygon(bbox);
+    const m2 = turf.area(polygon);
+    const ft2 = m2 * 10.7639;
+    console.log(`✅ Verified: Area of a zoom level 18 tile = ${ft2.toFixed(2)} ft²`);
+  })();
+</script>
+
+</body>
+</html>
